@@ -133,4 +133,4 @@ mxa-powerpoint/
 
 ## License
 
-See individual script headers for license information.
+This project is licensed under the [MIT License](LICENSE).
