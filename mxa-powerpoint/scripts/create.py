@@ -1156,6 +1156,115 @@ def _check_adjacency(slides_spec):
 
 
 # ---------------------------------------------------------------------------
+# Spec validation
+# ---------------------------------------------------------------------------
+
+# Required fields per shape. Each entry maps to a list of (field, expected_type)
+# where expected_type is 'str' for a top-level string, or 'list' for a list
+# whose items must contain the listed sub-keys.
+_SHAPE_REQUIRED_FIELDS = {
+    "stat-row":      {"stats": [{"value", "label"}]},
+    "n-column":      {"columns": [{"header"}]},
+    "callout-stack": {"callouts": "list_of_str_or_dict_with_text"},
+    "split":         {"bullets": "list", "callout": "str"},
+    "process":       {"steps": [{"title", "description"}]},
+    "icon-cards":    {"cards": [{"header", "text"}]},
+    "big-quote":     {"quote": "str"},
+    "matrix":        {"quadrants": "list"},
+}
+
+
+def _validate_slide_spec(slide_spec, slide_index):
+    """Check that required fields are present for the chosen shape.
+
+    Prints warnings to stderr for every problem found.
+    Returns True if valid, False if any required field is missing or malformed.
+    """
+    shape = slide_spec.get("shape", "")
+    if not shape:
+        archetype = slide_spec.get("archetype", "content-text")
+        shape = _ARCHETYPE_DEFAULT_SHAPE.get(archetype, "")
+    if not shape or shape == "bullets":
+        return True  # no strict schema for bullets
+
+    reqs = _SHAPE_REQUIRED_FIELDS.get(shape)
+    if reqs is None:
+        return True  # unknown shape — nothing to validate
+
+    label = slide_spec.get('lead', f'slide {slide_index + 1}')[:60]
+    ok = True
+
+    for field, constraint in reqs.items():
+        val = slide_spec.get(field)
+
+        # --- field missing or empty ---
+        if val is None or val == "" or val == []:
+            print(f"SPEC ERROR (slide {slide_index + 1}): shape '{shape}' "
+                  f"requires '{field}' but it is missing or empty.  "
+                  f"Slide: {label}",
+                  file=sys.stderr)
+            ok = False
+            continue
+
+        # --- list of dicts with required sub-keys ---
+        if isinstance(constraint, list) and isinstance(constraint[0], set):
+            required_keys = constraint[0]
+            if not isinstance(val, list):
+                print(f"SPEC ERROR (slide {slide_index + 1}): '{field}' must "
+                      f"be a list for shape '{shape}'.  Slide: {label}",
+                      file=sys.stderr)
+                ok = False
+                continue
+            for j, item in enumerate(val):
+                if isinstance(item, dict):
+                    missing = required_keys - item.keys()
+                    if missing:
+                        print(f"SPEC ERROR (slide {slide_index + 1}): "
+                              f"'{field}[{j}]' is missing keys "
+                              f"{sorted(missing)} for shape '{shape}'.  "
+                              f"Slide: {label}",
+                              file=sys.stderr)
+                        ok = False
+
+        # --- callout-stack special: list of str or dict-with-text ---
+        elif constraint == "list_of_str_or_dict_with_text":
+            if not isinstance(val, list):
+                print(f"SPEC ERROR (slide {slide_index + 1}): '{field}' must "
+                      f"be a list for shape '{shape}'.  Slide: {label}",
+                      file=sys.stderr)
+                ok = False
+                continue
+            for j, item in enumerate(val):
+                if isinstance(item, dict) and "text" not in item:
+                    print(f"SPEC ERROR (slide {slide_index + 1}): "
+                          f"'{field}[{j}]' is a dict but missing 'text' key "
+                          f"for shape '{shape}'.  Expected keys: 'text' "
+                          f"(and optional 'accent').  Got: {sorted(item.keys())}  "
+                          f"Slide: {label}",
+                          file=sys.stderr)
+                    ok = False
+
+        # --- simple list ---
+        elif constraint == "list":
+            if not isinstance(val, list):
+                print(f"SPEC ERROR (slide {slide_index + 1}): '{field}' must "
+                      f"be a list for shape '{shape}'.  Slide: {label}",
+                      file=sys.stderr)
+                ok = False
+
+        # --- simple string ---
+        elif constraint == "str":
+            if not isinstance(val, str) or not val.strip():
+                print(f"SPEC ERROR (slide {slide_index + 1}): '{field}' must "
+                      f"be a non-empty string for shape '{shape}'.  "
+                      f"Slide: {label}",
+                      file=sys.stderr)
+                ok = False
+
+    return ok
+
+
+# ---------------------------------------------------------------------------
 # Main creation
 # ---------------------------------------------------------------------------
 
@@ -1182,8 +1291,9 @@ def create_from_template(spec, template_path, output_path):
                 pass
         sld_list.remove(entry)
 
-    # Build each slide
+    # Validate and build each slide
     for i, slide_spec in enumerate(slides_spec):
+        _validate_slide_spec(slide_spec, i)
         builder = _resolve_builder(slide_spec)
         builder(prs, slide_spec, pres_title, date, i + 1)
 
